@@ -1,0 +1,33 @@
+name: Daily Job Pipeline
+
+on:
+  schedule:
+    # Runs every day at 7:00 AM Dubai time (UTC+4 = 03:00 UTC)
+    - cron: "0 3 * * *"
+  workflow_dispatch:   # allows manual trigger from GitHub UI anytime
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run job pipeline
+        env:
+          APIFY_TOKEN:          ${{ secrets.APIFY_TOKEN }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          EMAIL_FROM:           ${{ secrets.EMAIL_FROM }}
+          EMAIL_APP_PASSWORD:   ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO:             ${{ secrets.EMAIL_TO }}
+        run: python scripts/job_pipeline.py
