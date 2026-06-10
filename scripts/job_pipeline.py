@@ -131,6 +131,8 @@ def claude(prompt: str, system: str = "", max_tokens: int = 1500) -> str:
     if system:
         body["system"] = system
     r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=60)
+    if not r.ok:
+        print(f"  Anthropic error {r.status_code}: {r.text}")
     r.raise_for_status()
     return r.json()["content"][0]["text"]
 
