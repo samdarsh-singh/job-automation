@@ -134,32 +134,34 @@ def claude(prompt: str, system: str = "", max_tokens: int = 1500) -> str:
     r.raise_for_status()
     return r.json()["content"][0]["text"]
 
-def score_jobs(jobs: list[dict], category: str) -> list[dict]:
-    """Score all jobs in one Claude call and return sorted list."""
+def score_batch(jobs: list[dict], category: str, offset: int = 0) -> list[dict]:
     job_list = "\n".join(
-        f"{i+1}. [{j.get('title','')}] at [{j.get('companyName','')}] — {j.get('descriptionText','')[:400]}"
+        f"{offset+i+1}. [{j.get('title','')}] at [{j.get('companyName','')}] — {j.get('descriptionText','')[:150]}"
         for i, j in enumerate(jobs)
     )
-    prompt = f"""You are evaluating {category} job listings for this candidate:
+    prompt = f"""Evaluate these {category} jobs for this candidate (Dubai-based, 7yr Python/AI backend engineer, LLM deployment, FastAPI, forward deployed enterprise AI):
 
-{RESUME}
-
-Rate each job 1-10 on fit. Reply ONLY with a JSON array:
-[{{"rank": 1, "score": 9, "reason": "one sentence why"}}, ...]
-One object per job, in the same order as the input list.
+Rate each job 1-10 on fit. Reply ONLY with valid JSON array, no markdown:
+[{{"score": 9, "reason": "one sentence"}}, ...]
+One object per job in order.
 
 JOBS:
 {job_list}"""
-
-    raw = claude(prompt, max_tokens=2000)
-    # Strip markdown fences if present
+    raw = claude(prompt, max_tokens=1000)
     raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    scores = json.loads(raw)
+    return json.loads(raw)
 
+def score_jobs(jobs: list[dict], category: str) -> list[dict]:
+    all_scores = []
+    for i in range(0, len(jobs), 10):
+        batch = jobs[i:i+10]
+        print(f"  Scoring batch {i//10 + 1}...")
+        scores = score_batch(batch, category, offset=i)
+        all_scores.extend(scores)
+        time.sleep(2)
     for i, j in enumerate(jobs):
-        j["score"] = scores[i].get("score", 5)
-        j["reason"] = scores[i].get("reason", "")
-
+        j["score"] = all_scores[i].get("score", 5) if i < len(all_scores) else 5
+        j["reason"] = all_scores[i].get("reason", "") if i < len(all_scores) else ""
     return sorted(jobs, key=lambda x: x["score"], reverse=True)
 
 def generate_cover_letter(job: dict) -> str:
