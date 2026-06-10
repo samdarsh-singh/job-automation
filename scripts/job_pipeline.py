@@ -10,10 +10,13 @@ import os
 import json
 import time
 import smtplib
+import subprocess
 import requests
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 
 # ── Config ────────────────────────────────────────────────────────────────────
 APIFY_TOKEN     = os.environ["APIFY_TOKEN"]
@@ -131,12 +134,11 @@ def claude(prompt: str, system: str = "", max_tokens: int = 1500) -> str:
     if system:
         body["system"] = system
     r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=60)
-    if not r.ok:
-        print(f"  Anthropic error {r.status_code}: {r.text}")
     r.raise_for_status()
     return r.json()["content"][0]["text"]
 
 def score_batch(jobs: list[dict], category: str, offset: int = 0) -> list[dict]:
+    """Score a batch of up to 10 jobs in one Claude call."""
     job_list = "\n".join(
         f"{offset+i+1}. [{j.get('title','')}] at [{j.get('companyName','')}] — {j.get('descriptionText','')[:150]}"
         for i, j in enumerate(jobs)
@@ -149,11 +151,13 @@ One object per job in order.
 
 JOBS:
 {job_list}"""
+
     raw = claude(prompt, max_tokens=1000)
     raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
     return json.loads(raw)
 
 def score_jobs(jobs: list[dict], category: str) -> list[dict]:
+    """Score all jobs in batches of 10 and return sorted list."""
     all_scores = []
     for i in range(0, len(jobs), 10):
         batch = jobs[i:i+10]
@@ -161,9 +165,11 @@ def score_jobs(jobs: list[dict], category: str) -> list[dict]:
         scores = score_batch(batch, category, offset=i)
         all_scores.extend(scores)
         time.sleep(2)
+
     for i, j in enumerate(jobs):
         j["score"] = all_scores[i].get("score", 5) if i < len(all_scores) else 5
         j["reason"] = all_scores[i].get("reason", "") if i < len(all_scores) else ""
+
     return sorted(jobs, key=lambda x: x["score"], reverse=True)
 
 def generate_cover_letter(job: dict) -> str:
@@ -285,13 +291,40 @@ def build_email(tech_jobs: list[dict], bd_jobs: list[dict], date_str: str) -> st
 </div>
 </body></html>"""
 
+# ── Resume Generator ──────────────────────────────────────────────────────────
+def generate_resume() -> str | None:
+    """Run the Node.js resume generator and return the output file path."""
+    script = os.path.join(os.path.dirname(__file__), "generate_resume.js")
+    out_path = os.path.join(os.path.dirname(__file__), "resume_output.docx")
+    try:
+        subprocess.run(["node", script], check=True, cwd=os.path.dirname(__file__))
+        print(f"  Resume generated: {out_path}")
+        return out_path
+    except Exception as e:
+        print(f"  Resume generation failed: {e}")
+        return None
+
 # ── Send Email ────────────────────────────────────────────────────────────────
-def send_email(html: str, date_str: str):
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🎯 Daily Job Digest — {date_str} | {40} fresh Dubai listings"
+def send_email(html: str, date_str: str, resume_path: str | None = None):
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = f"🎯 Daily Job Digest — {date_str} | 40 fresh Dubai listings"
     msg["From"]    = EMAIL_FROM
     msg["To"]      = EMAIL_TO
-    msg.attach(MIMEText(html, "html"))
+
+    # HTML body
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(html, "html"))
+    msg.attach(alt)
+
+    # Attach resume if generated
+    if resume_path and os.path.exists(resume_path):
+        with open(resume_path, "rb") as f:
+            part = MIMEBase("application", "vnd.openxmlformats-officedocument.wordprocessingml.document")
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=f"Samdarsh_Singh_Resume_{date_str.replace(' ', '_')}.docx")
+        msg.attach(part)
+        print(f"  Resume attached to email")
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
@@ -334,10 +367,14 @@ def main():
             job["cover_letter"] = generate_cover_letter(job)
             time.sleep(1)
 
-    # 4. Build & send email
+    # 4. Generate resume
+    print("Generating ATS resume...")
+    resume_path = generate_resume()
+
+    # 5. Build & send email
     print("Sending email digest...")
     html = build_email(tech_jobs, bd_jobs, date_str)
-    send_email(html, date_str)
+    send_email(html, date_str, resume_path)
 
     print("\n✅ Pipeline complete!")
 
